@@ -4,32 +4,6 @@
 
 ---
 
-## Arsitektur Sistem
-
-```
-┌─────────────────────────────────────────────────────────┐
-│               Docker Compose Internal Network           │
-│                                                         │
-│  ┌──────────┐   POST /publish   ┌───────────────────┐   │
-│  │publisher │ ────────────────▶ │    aggregator     │   │
-│  │(simulator│                  │  FastAPI :8080    │   │
-│  └──────────┘                  │                   │   │
-│                                │  Consumer Worker 1│   │
-│                                │  Consumer Worker 2│   │
-│                                │  Consumer Worker 3│   │
-│                                └─────────┬─────────┘   │
-│                    LPUSH/BRPOP           │              │
-│  ┌──────────┐ ◀───────────────────────── │              │
-│  │  broker  │ Redis 7                   │              │
-│  │  :6379   │           INSERT ON CONFLICT              │
-│  └──────────┘ ◀───────────────────────── │              │
-│  ┌──────────┐                           │              │
-│  │ storage  │ PostgreSQL 16             │              │
-│  │  :5432   │                           ▼              │
-│  └──────────┘                                          │
-└─────────────────────────────────────────────────────────┘
-```
-
 ### Komponen
 
 | Service | Image | Port | Fungsi |
@@ -280,59 +254,6 @@ Dua worker yang proses event yang sama **secara bersamaan**:
 - **Worker B**: `INSERT` → `ON CONFLICT DO NOTHING` (constraint melindungi)
 
 PostgreSQL menjamin atomisitas operasi ini di level storage engine, sehingga **tidak mungkin** terjadi double-insert meskipun concurrent.
-
----
-
-## Keputusan Desain
-
-| Keputusan | Pilihan | Alasan |
-|---|---|---|
-| Bahasa | Python (FastAPI) | Ekosistem async yang matang, asyncpg untuk DB |
-| Broker | Redis 7 | BRPOP native, persistensi AOF, ringan |
-| Storage | PostgreSQL 16 | UNIQUE constraint atomik, JSONB payload |
-| Isolation Level | READ COMMITTED | Cukup untuk conflict resolution via unique constraint |
-| Consumer | 3 async workers dalam 1 proses | Sederhana, tidak perlu proses terpisah |
-| Dedup scope | (topic, event_id) | event_id mungkin sama di topic berbeda |
-| Audit log | Ya | Observabilitas untuk setiap keputusan pemrosesan |
-
----
-
-## Struktur Direktori
-
-```
-UAS/
-├── docker-compose.yml        # Orkestrasi semua service
-├── pytest.ini                # Konfigurasi pytest
-├── README.md                 # Dokumentasi ini
-├── report.md                 # Laporan teori T1-T10 (APA 7th)
-│
-├── aggregator/
-│   ├── Dockerfile            # Non-root, python:3.11-slim
-│   ├── requirements.txt
-│   ├── config.py             # Konfigurasi dari env vars
-│   ├── models.py             # Pydantic models + validasi
-│   ├── database.py           # asyncpg pool + skema DDL
-│   ├── consumer.py           # Worker loop + transaksi idempotent
-│   └── main.py               # FastAPI app + endpoints
-│
-├── publisher/
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   └── main.py               # Simulator event dengan duplikat
-│
-├── tests/
-│   ├── requirements.txt
-│   ├── conftest.py           # Fixtures bersama
-│   ├── test_dedup.py         # 4 tests: deduplication
-│   ├── test_api.py           # 5 tests: API endpoints
-│   ├── test_concurrency.py   # 3 tests: race conditions
-│   ├── test_persistence.py   # 2 tests: persistensi
-│   ├── test_schema.py        # 5 tests: validasi skema
-│   └── test_stats.py         # 3 tests: konsistensi statistik
-│
-└── k6/
-    └── load_test.js          # Load test ≥20.000 events
-```
 
 ---
 
